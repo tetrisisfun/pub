@@ -23,16 +23,20 @@ def createIndex(shapefile):
 
 
 def findZone(p, index, zones):
-    '''
-    findZone returned the ID of the shape (stored in 'zones' with
-    'index') that contains the given point 'p'. If there's no match,
-    None will be returned.
-    '''
+
     match = index.intersection((p.x, p.y, p.x, p.y))
     for idx in match:
         if zones.geometry[idx].contains(p):
-            return idx
+            return zones.neighborhood[idx]
     return None
+
+def findBorough(p, index, zones):
+    match = index.intersection((p.x, p.y, p.x, p.y))
+    for idx in match:
+        if zones.geometry[idx].contains(p):
+            return zones.borough[idx]
+    return None
+
 
 def processTrips(pid, records):
     '''
@@ -42,7 +46,7 @@ def processTrips(pid, records):
     '''
     import csv
     import pyproj
-    import shapely.geometry as geom  
+    import shapely.geometry as geom
     
     # Create an R-tree index
     proj = pyproj.Proj(init="epsg:2263", preserve_units=True)    
@@ -55,11 +59,22 @@ def processTrips(pid, records):
     counts = {}
     
     for row in reader:
-        p = geom.Point(proj(float(row[9]), float(row[10]))) 
-        # Look up a matching zone, and update the count accordly if such a match is found
-        zone = findZone(p, index, zones) 
-        if zone:
-            counts[zone] = counts.get(zone, 0) + 1
+        try:
+
+            orig = geom.Point(proj(float(row[5]), float(row[6])))
+            dest = geom.Point(proj(float(row[9]), float(row[10])))
+        
+        
+            # Look up a matching zone, and update the count accordingly if such a match is found
+            zone = findZone(orig, index, zones)
+            borough = findBorough(dest, index, zones)
+        
+            if zone and borough:
+                counts[borough, zone] = counts.get((borough, zone), 0) + 1
+
+        except (ValueError, IndexError):
+            pass
+    
     return counts.items()
             
 if __name__=='__main__':
@@ -68,19 +83,18 @@ if __name__=='__main__':
     input_file = sys.argv[1]
     yellow_taxi = sc.textFile(input_file)
 
-    counts = yellow_taxi.mapPartitionsWithIndex(processTrips) \
-        .reduceByKey(lambda x,y: x+y) \
-        .collect()
+    counts = yellow_taxi.mapPartitionsWithIndex(processTrips).reduceByKey(lambda x,y: x+y).collect()
 
-    countsPerNeighborhood = map(lambda x: (zones['neighborhood'][x[0]], zones['borough'][x[0]],x[1]), counts)
+    rddattempt = sc.parallelize(counts)
 
-    rddattempt = sc.parallelize(countsPerNeighborhood)
+    rddattempt_1 = rddattempt.map(lambda x: (x[0][0],((x[0][1], x[1]))))\
+        .sortBy(lambda x: x[1][1], ascending=False)\
+        .groupByKey()\
+        .mapValues(list)\
+        .reduceByKey(lambda x,y: x+y)\
+        .sortByKey()\
+        .map(lambda x: (x[0], x[1][0:3]))\
+        .map(lambda x:((x[0] + "," + x[1][0][0] + "," + str(x[1][0][1]) + "," + x[1][1][0] + "," + str(x[1][1][1]) + "," + x[1][2][0] + "," + str(x[1][2][1]))))
 
-    rddattempt_1 = rddattempt.map(lambda x:((x[1]),(x[2],x[0])))\
-            .groupByKey()\
-            .map(lambda x:((x[0]), sorted(x[1],reverse=True)))\
-            .sortByKey()\
-            .map(lambda x:((x[0]), (x[1][0:3])))\
-            .map(lambda x:((x[0] + "," + x[1][0][1] + "," + str(x[1][0][0]) + "," + x[1][1][1] + "," + str(x[1][1][0]) + "," + x[1][2][1] + "," + str(x[1][2][0]))))
-    
-    rddattempt_1.write.csv(output_file)
+    print(rddattempt.take(5))
+    rddattempt_1.saveAsTextFile(sys.argv[2])
