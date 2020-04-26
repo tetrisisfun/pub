@@ -66,8 +66,8 @@ def processTrips(pid, records):
         
         
             # Look up a matching zone, and update the count accordingly if such a match is found
-            zone = findZone(orig, index, zones)
-            borough = findBorough(dest, index, zones)
+            zone = findZone(dest, index, zones)
+            borough = findBorough(orig, index, zones)
         
             if zone and borough:
                 counts[borough, zone] = counts.get((borough, zone), 0) + 1
